@@ -517,12 +517,16 @@ impl Board {
 }
 impl std::fmt::Display for Board {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} ", self.state())?;
         if self.player == Some(Player::White) {
             write!(f, "White to play... ↓")?;
         } else if self.player == Some(Player::Black) {
             write!(f, "Black to play... ↑")?;
         } else {
             write!(f, "No player to play... ")?;
+            if self.state() == State::End {
+                write!(f, "{:?}", self.result.unwrap())?
+            }
         }
         if let Some(dice) = self.dice.0 {
             write!(f, "Dice: {:?} ", dice)?;
@@ -549,8 +553,8 @@ impl std::fmt::Display for Board {
                 Some((p, c)) => {
                     if c <= count {
                         write!(f, "   ")?;
-                    } else if c == 5 && count > 5 {
-                        write!(f, " {} ", count)?;
+                    } else if count == 5 && c > 5 {
+                        write!(f, " {:<2}", c)?;
                     } else {
                         if p == Player::White {
                             write!(f, " W ")?;

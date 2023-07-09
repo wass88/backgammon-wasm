@@ -234,11 +234,25 @@ struct Cube {
     doubled: bool,
 }
 impl Cube {
-    const CenterInit: Cube = Cube {
+    const CENTER_INIT: Cube = Cube {
         position: None,
         value: 1,
         doubled: false,
     };
+
+    fn double(&self, p: Player) -> Cube {
+        Cube {
+            position: Some(p.opponent()),
+            value: self.value,
+            doubled: true,
+        }
+    }
+    fn take(&self) -> Cube {
+        let mut cube = self.clone();
+        cube.doubled = false;
+        cube.value *= 2;
+        cube
+    }
 }
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 struct Match {
@@ -259,7 +273,6 @@ struct Board {
     dice: DiceRoll,
     cube: Cube,
     player: Option<Player>,
-    doubled: Option<Cube>,
     game: Match,
     result: Option<Result>,
 }
@@ -365,9 +378,8 @@ impl Board {
         Board {
             pieces: Pieces::new(),
             dice: DiceRoll::new(),
-            cube: Cube::CenterInit,
+            cube: Cube::CENTER_INIT,
             player: None,
-            doubled: None,
             result: None,
             game: Match::single(),
         }
@@ -395,7 +407,9 @@ impl Board {
                     .into_iter()
                     .map(|d| Action::InitRoll(d))
                     .collect();
-                res.push(Action::Double);
+                if self.can_double() {
+                    res.push(Action::Double);
+                }
                 res
             }
             State::Doubled => vec![Action::Pass, Action::Take],
@@ -433,16 +447,28 @@ impl Board {
         Move::uniq_moves(&moves)
     }
 
+    fn can_double(&self) -> bool {
+        // TODO: croford
+        self.cube.position.is_none() || self.cube.position != self.player
+    }
     fn double(&mut self) {
-        todo!()
+        let p = self.player.unwrap();
+        self.cube = self.cube.double(p);
+        self.player = Some(p.opponent());
     }
 
     fn pass(&mut self) {
+        let p = self.player.unwrap();
+        self.result = Some(Result {
+            player: p.opponent(),
+            score: self.cube.value,
+        });
         self.game_end()
     }
 
     fn take(&mut self) {
-        todo!()
+        self.cube = self.cube.take();
+        self.player = Some(self.player.unwrap().opponent());
     }
 
     fn reset(&mut self) {
@@ -483,7 +509,7 @@ impl Board {
         if self.cube.doubled {
             return State::Doubled;
         }
-        if self.dice.0.is_none() {
+        if self.dice.0.is_none() && self.player.is_some() {
             return State::ToRoll;
         }
         return State::Init;
@@ -658,6 +684,53 @@ mod test {
         );
     }
 
+    #[test]
+    fn double_pass() {
+        let mut b = Board::new();
+        b.init_roll(Dice(5, 6));
+        let act = &b.actions()[0];
+        b.act(&act);
+
+        assert_eq!(b.player, Some(Player::White));
+        b.act(&Action::Double);
+        assert_eq!(b.state(), State::Doubled);
+        assert_eq!(b.player, Some(Player::Black));
+        b.act(&Action::Pass);
+        assert_eq!(b.state(), State::End);
+        assert_eq!(
+            b.result,
+            Some(Result {
+                player: Player::White,
+                score: 1
+            })
+        );
+    }
+
+    #[test]
+    fn double_take() {
+        let mut b = Board::new();
+        b.init_roll(Dice(5, 6));
+        let act = &b.actions()[0];
+        b.act(&act);
+
+        assert_eq!(b.player, Some(Player::White));
+        b.act(&Action::Double);
+
+        assert_eq!(b.state(), State::Doubled);
+        assert_eq!(b.player, Some(Player::Black));
+        b.act(&Action::Take);
+
+        assert_eq!(b.player, Some(Player::White));
+        assert_eq!(b.state(), State::ToRoll);
+        assert_eq!(
+            b.cube,
+            Cube {
+                position: Some(Player::Black),
+                value: 2,
+                doubled: false
+            }
+        )
+    }
     #[test]
     fn move_ord() {
         assert!(

@@ -359,6 +359,22 @@ impl Move {
         moves.sort();
         moves
     }
+    fn filter_moves(moves: &[Move]) -> Vec<Move> {
+        if let Some(max_moves) = moves.iter().map(|m| m.0.len()).max() {
+            let use_all = moves.iter().filter(|m| m.0.len() == max_moves);
+            if max_moves == 1 {
+                let max_roll = use_all.clone().map(|m| m.0[0].1 - m.0[0].0).max().unwrap();
+                use_all
+                    .filter(|m| m.0[0].1 - m.0[0].0 == max_roll)
+                    .map(|m| m.clone())
+                    .collect()
+            } else {
+                use_all.cloned().collect()
+            }
+        } else {
+            vec![]
+        }
+    }
 }
 impl PartialOrd for Move {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -444,7 +460,7 @@ impl Board {
             let mut m = pieces.listup(dice, self.player.unwrap());
             moves.append(&mut m);
         }
-        Move::uniq_moves(&moves)
+        Move::filter_moves(&Move::uniq_moves(&moves))
     }
 
     fn can_double(&self) -> bool {
@@ -735,6 +751,7 @@ mod test {
             }
         )
     }
+
     #[test]
     fn move_ord() {
         assert!(

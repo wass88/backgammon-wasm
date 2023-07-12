@@ -117,7 +117,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn small_case() {
+    fn minimum_case() {
         let b = Board::from_xgid("XGID=-A----------------------a-:0:0:1::0:0:0:1:10");
         let mut e = OpenEvaluator::new();
         let eq = e.eval(&b);
@@ -125,6 +125,17 @@ mod test {
         assert_eq!(eq.0.len(), 2);
         let eps = 1e5;
         assert!((eq.0[0].1 - 1.).abs() < eps, "{}", eq.0[0].1);
+        assert!((eq.0[1].1 - 1.).abs() < eps, "{}", eq.0[1].1);
+    }
+    #[test]
+    fn small_case() {
+        let b = Board::from_xgid("XGID=-A------------------a-----:0:0:1::0:0:0:1:10");
+        let mut e = OpenEvaluator::new();
+        let eq = e.eval(&b);
+        println!("{:?}", eq);
+        assert_eq!(eq.0.len(), 2);
+        let eps = 1e5;
+        assert!(eq.0[0].1 + eps < 1., "{}", eq.0[0].1);
         assert!((eq.0[1].1 - 1.).abs() < eps, "{}", eq.0[1].1);
     }
 }

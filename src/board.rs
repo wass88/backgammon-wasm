@@ -114,7 +114,13 @@ impl Pieces {
         }
     }
     fn mov(&mut self, from: usize, to: usize, player: Player) {
-        assert!(self.movable(from, to, player));
+        assert!(
+            self.movable(from, to, player),
+            "{:?}/{:?} {:?}",
+            from,
+            to,
+            player
+        );
         if self.hittable(to, player) {
             self.hit(to, player);
         }
@@ -122,8 +128,8 @@ impl Pieces {
         self.add(to, player, 1);
     }
     fn backman(&self, p: Player) -> usize {
-        for i in (0..Pieces::BOARD_SIZE).rev() {
-            if let Some((o, c)) = self.get(i) {
+        for i in (0..=Pieces::BAR).rev() {
+            if let Some((o, _)) = self.get(i) {
                 if o == p {
                     return i;
                 }
@@ -133,13 +139,13 @@ impl Pieces {
     }
     fn listup(&self, dice: &[usize], p: Player) -> Vec<Move> {
         let pieces = self;
-        if dice.len() == 0 {
+        if dice.len() == 0 || self.backman(p) == 0 {
             return vec![Move(vec![])];
         }
         let (d, dice) = dice.split_at(1);
         let mut d = d[0];
         let mut mov = vec![];
-        for i in (0..Pieces::BOARD_SIZE).rev() {
+        for i in (1..=Pieces::BOARD_SIZE).rev() {
             let backman = pieces.backman(p);
             // move from bar
             if backman == 0 && !pieces.movable(0, d, p) {
@@ -227,11 +233,11 @@ impl DiceRoll {
         }
         v
     }
-    pub fn all_with_count() -> Vec<(Dice, usize)> {
+    pub fn all_with_prob() -> Vec<(Dice, f64)> {
         let mut v = vec![];
         for x in 1..=6 {
             for y in x..=6 {
-                v.push((Dice(x, y), if x == y { 1 } else { 2 }));
+                v.push((Dice(x, y), if x == y { 1. / 36. } else { 2. / 36. }));
             }
         }
         v
@@ -266,6 +272,9 @@ impl Cube {
             doubled: true,
             max_level: 10,
         }
+    }
+    fn reach_max(self) -> bool {
+        self.level >= self.max_level
     }
     fn take(&self) -> Cube {
         let mut cube = self.clone();
@@ -425,11 +434,13 @@ impl Move {
         if let Some(max_moves) = moves.iter().map(|m| m.0.len()).max() {
             let use_all = moves.iter().filter(|m| m.0.len() == max_moves);
             if max_moves == 1 {
-                let max_roll = use_all.clone().map(|m| m.0[0].1 - m.0[0].0).max().unwrap();
+                let max_roll = use_all.clone().map(|m| m.0[0].0 - m.0[0].1).max().unwrap();
                 use_all
-                    .filter(|m| m.0[0].1 - m.0[0].0 == max_roll)
+                    .filter(|m| m.0[0].0 - m.0[0].1 == max_roll)
                     .map(|m| m.clone())
                     .collect()
+            } else if max_moves == 0 {
+                vec![Move::DANCE]
             } else {
                 use_all.cloned().collect()
             }
@@ -527,8 +538,9 @@ impl Board {
     }
 
     pub fn can_double(&self) -> bool {
-        // TODO: croford
-        !self.game.crawford && self.cube.position.is_none() || self.cube.position != self.player
+        !self.game.crawford
+            && !self.cube.reach_max()
+            && (self.cube.position.is_none() || self.cube.position == self.player)
     }
 
     fn double(&mut self) {
@@ -560,9 +572,8 @@ impl Board {
 
     fn check_end(&mut self) {
         let p = self.player.unwrap();
-        let ps = self.pieces.reversed(p);
-        let white = ps.goal(Player::White);
-        let black = ps.goal(Player::Black);
+        let white = self.pieces.reversed(Player::White).goal(Player::White);
+        let black = self.pieces.reversed(Player::Black).goal(Player::Black);
         if white > 0 {
             self.result = Some(Result {
                 player: Player::White,
@@ -582,10 +593,12 @@ impl Board {
         self.player = None;
         let result = self.result.unwrap();
         self.game.add_score(result.player, result.score);
-        // TODO: match_end
     }
 
     pub fn state(&self) -> State {
+        if self.game.winner().is_some() {
+            return State::MatchEnd;
+        }
         if self.result.is_some() {
             return State::End;
         }
@@ -651,7 +664,7 @@ impl Board {
 
         s
     }
-    fn from_xgid(id: &str) -> Board {
+    pub fn from_xgid(id: &str) -> Board {
         let i = id.find("=").unwrap();
         let id = &id[i + 1..];
         let id: Vec<&str> = id.split(':').collect();
@@ -971,5 +984,12 @@ mod test {
         let id = "XGID=-b----E-C---eE---c-e----B---:1:1:1:11:1:2:1:3:10";
         let b = Board::from_xgid(id);
         assert_eq!(b.xgid(), id);
+    }
+    #[test]
+    fn moves() {
+        let b = Board::from_xgid("XGID=-A----------------------a-:0:0:1:11:0:0:0:1:10");
+        let moves = b.moves();
+        println!("{:?}", moves);
+        assert_eq!(moves, vec![Move(vec![(1, 0, false)])]);
     }
 }

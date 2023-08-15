@@ -22,8 +22,8 @@ impl Pieces {
     const INNER_BOARD: usize = 6;
     const BAR: usize = 25;
     const GOAL: usize = 0;
-    const BLACK_BAR: usize = 27;
     const BLACK_GOAL: usize = 26;
+    const BLACK_BAR: usize = 27;
     const MAX_PIECES: usize = 15;
 
     fn empty() -> Pieces {
@@ -167,12 +167,11 @@ impl Pieces {
                 let mut np = pieces.clone();
                 np.mov(i, i - d, p);
                 for mut m in np.listup(dice, p) {
-                    m.0.push((i, i - d, pieces.hittable(i - d, p)));
+                    m.0.insert(0, (i, i - d, pieces.hittable(i - d, p)));
                     mov.push(m);
                 }
             }
         }
-        mov.iter_mut().for_each(|m| m.0.reverse());
         mov
     }
     fn goal(&self, p: Player) -> usize {
@@ -180,7 +179,6 @@ impl Pieces {
         if ps.backman(p) > 0 {
             return 0;
         }
-        let ps = ps.reverse();
         if ps.get(Pieces::GOAL).is_some() {
             return 1;
         }
@@ -193,7 +191,16 @@ impl Pieces {
     }
 }
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct Dice(usize, usize);
+pub struct Dice(pub usize, pub usize);
+impl Dice {
+    pub fn prob(&self) -> f64 {
+        if self.0 == self.1 {
+            1.0 / 36.0
+        } else {
+            2.0 / 36.0
+        }
+    }
+}
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct DiceRoll(Option<Dice>);
 impl DiceRoll {
@@ -224,7 +231,7 @@ impl DiceRoll {
             vec![vec![x, y], vec![y, x]]
         }
     }
-    fn all() -> Vec<Dice> {
+    pub fn all() -> Vec<Dice> {
         let mut v = vec![];
         for x in 1..=6 {
             for y in x..=6 {
@@ -288,9 +295,9 @@ impl Cube {
 }
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Match {
-    score: (usize, usize),
-    length: usize,
-    crawford: bool,
+    pub score: (usize, usize),
+    pub length: usize,
+    pub crawford: bool,
 }
 impl Match {
     fn single() -> Match {
@@ -342,6 +349,7 @@ pub struct Board {
     pub pieces: Pieces,
     pub dice: DiceRoll,
     pub cube: Cube,
+    pub to_roll: bool,
     pub player: Option<Player>,
     pub game: Match,
     pub result: Option<Result>,
@@ -354,6 +362,7 @@ pub struct Result {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum State {
     Init,
+    ToDouble,
     ToRoll,
     Doubled,
     ToMove,
@@ -365,11 +374,12 @@ pub enum Action {
     InitRoll(Dice),
     Roll(Dice),
     Move(Move),
+    NoDouble,
     Double,
     Pass,
     Take,
     Reset,
-    None, // do nothing
+    None, // for tree search
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -468,6 +478,7 @@ impl Board {
             pieces: Pieces::new(),
             dice: DiceRoll::new(),
             cube: Cube::CENTER_INIT,
+            to_roll: false,
             player: None,
             result: None,
             game: Match::single(),
@@ -478,11 +489,12 @@ impl Board {
             Action::InitRoll(d) => self.init_roll(*d),
             Action::Roll(d) => self.roll(*d),
             Action::Move(m) => self.act_move(m),
+            Action::NoDouble => self.no_double(),
             Action::Double => self.double(),
             Action::Pass => self.pass(),
             Action::Take => self.take(),
             Action::Reset => self.reset(),
-            Action::None => panic!("Invalid action"),
+            Action::None => unreachable!(),
         }
     }
     pub fn actions(&self) -> Vec<Action> {
@@ -492,16 +504,17 @@ impl Board {
                 .map(|d| Action::InitRoll(d))
                 .collect(),
             State::ToMove => self.moves().into_iter().map(|m| Action::Move(m)).collect(),
-            State::ToRoll => {
-                let mut res: Vec<Action> = DiceRoll::all()
-                    .into_iter()
-                    .map(|d| Action::InitRoll(d))
-                    .collect();
+            State::ToDouble => {
                 if self.can_double() {
-                    res.push(Action::Double);
+                    vec![Action::Double, Action::NoDouble]
+                } else {
+                    vec![Action::NoDouble]
                 }
-                res
             }
+            State::ToRoll => DiceRoll::all()
+                .into_iter()
+                .map(|d| Action::InitRoll(d))
+                .collect(),
             State::Doubled => vec![Action::Pass, Action::Take],
             State::End => vec![Action::Reset],
             State::MatchEnd => vec![],
@@ -513,6 +526,7 @@ impl Board {
     }
     fn roll(&mut self, dice: Dice) {
         self.dice = DiceRoll(Some(dice));
+        self.to_roll = false;
     }
     fn act_move(&mut self, mov: &Move) {
         let p = self.player.unwrap();
@@ -543,6 +557,9 @@ impl Board {
             && (self.cube.position.is_none() || self.cube.position == self.player)
     }
 
+    fn no_double(&mut self) {
+        self.to_roll = true;
+    }
     fn double(&mut self) {
         let p = self.player.unwrap();
         assert!(self.can_double());
@@ -564,6 +581,7 @@ impl Board {
         assert!(self.cube.doubled);
         self.cube = self.cube.take();
         self.player = Some(self.player.unwrap().opponent());
+        self.to_roll = true;
     }
 
     fn reset(&mut self) {
@@ -572,8 +590,8 @@ impl Board {
 
     fn check_end(&mut self) {
         let p = self.player.unwrap();
-        let white = self.pieces.reversed(Player::White).goal(Player::White);
-        let black = self.pieces.reversed(Player::Black).goal(Player::Black);
+        let white = self.pieces.goal(Player::White);
+        let black = self.pieces.goal(Player::Black);
         if white > 0 {
             self.result = Some(Result {
                 player: Player::White,
@@ -608,8 +626,11 @@ impl Board {
         if self.cube.doubled {
             return State::Doubled;
         }
-        if self.dice.0.is_none() && self.player.is_some() {
+        if self.to_roll {
             return State::ToRoll;
+        }
+        if self.dice.0.is_none() && self.player.is_some() {
+            return State::ToDouble;
         }
         return State::Init;
     }
@@ -657,6 +678,7 @@ impl Board {
         let length = self.game.length;
         let max_level = self.cube.max_level;
 
+        // piece:cube:pos:player:dice:white_score:black_score:crawford:length:max_level
         s.push_str(&format!(
             ":{}:{}:{}:{}:{}:{}:{}:{}:{}",
             level, pos, player, dice, white_score, black_score, crawford, length, max_level
@@ -727,6 +749,7 @@ impl Board {
             pieces,
             cube,
             player,
+            to_roll: cube.position == player.map(|p| p.opponent()),
             dice,
             game,
             result: None,
@@ -750,6 +773,9 @@ impl std::fmt::Display for Board {
             write!(f, "Dice: {:?} ", dice)?;
         }
         write!(f, "\nCube: {:?} ", self.cube)?;
+        if self.to_roll {
+            write!(f, "To roll... ")?;
+        }
         write!(f, "\n")?;
         write!(f, "Score: {:?} ", self.game.score)?;
         write!(f, "Length: {:?} \n", self.game.length)?;
@@ -866,6 +892,11 @@ mod test {
         println!("{:?}", act);
         b.act(&act);
         println!("{}", b);
+
+        assert_eq!(b.state(), State::ToDouble);
+        assert_eq!(b.player, Some(Player::Black));
+        b.act(&Action::NoDouble);
+
         assert_eq!(b.state(), State::ToRoll);
         assert_eq!(b.player, Some(Player::Black));
 
@@ -891,10 +922,12 @@ mod test {
         let act = &b.actions()[0];
         b.act(&act);
         let mut i = 0;
-        while b.state() != State::End {
+        while b.state() != State::MatchEnd {
+            b.act(&Action::NoDouble);
             b.act(&Action::Roll(Dice(5, 6)));
             println!("{}", b);
             let act = &b.actions()[0];
+            println!("{:?}", act);
             b.act(&act);
             i += 1;
             if i > 39 {
@@ -914,6 +947,7 @@ mod test {
     #[test]
     fn double_pass() {
         let mut b = Board::new();
+        b.game.length = 3;
         b.init_roll(Dice(5, 6));
         let act = &b.actions()[0];
         b.act(&act);
@@ -936,6 +970,7 @@ mod test {
     #[test]
     fn double_take() {
         let mut b = Board::new();
+        b.game.length = 3;
         b.init_roll(Dice(5, 6));
         let act = &b.actions()[0];
         b.act(&act);
@@ -991,5 +1026,42 @@ mod test {
         let moves = b.moves();
         println!("{:?}", moves);
         assert_eq!(moves, vec![Move(vec![(1, 0, false)])]);
+
+        let b = Board::from_xgid("XGID=-a------------------A-----:0:0:1:11:0:0:0:1:10");
+        print!("{}", b);
+        let moves = b.moves();
+        println!("{:?}", moves);
+        assert_eq!(
+            moves,
+            vec![Move(vec![
+                (20, 19, false),
+                (19, 18, false),
+                (18, 17, false),
+                (17, 16, false),
+            ])]
+        );
+    }
+    #[test]
+    fn reverse() {
+        let ps = Pieces(
+            vec![
+                1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 5, -6,
+                -7,
+            ]
+            .into_iter()
+            .map(Piece)
+            .collect(),
+        );
+        let r = ps.reverse();
+        assert_eq!(
+            r.0,
+            vec![
+                -6, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2, -7, 1,
+                5
+            ]
+            .into_iter()
+            .map(Piece)
+            .collect::<Vec<_>>()
+        )
     }
 }

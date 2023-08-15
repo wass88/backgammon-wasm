@@ -3,21 +3,26 @@ use std::collections::HashMap;
 use crate::board::{Action, Board, Dice, DiceRoll, Match, Player, State};
 
 #[derive(Clone, Debug)]
-struct Equities(Vec<(Action, f64)>);
+struct Equities {
+    actions: Vec<(Action, f64)>,
+    equity: f64,
+}
 impl Equities {
-    fn max(&self, player: Player) -> (Action, f64) {
-        self.0
-            .iter()
-            .max_by(|(_, a), (_, b)| {
-                if player == Player::White {
-                    a.partial_cmp(b).unwrap()
-                } else {
-                    b.partial_cmp(a).unwrap()
-                }
-            })
-            .unwrap()
-            .clone()
+    fn new(actions: Vec<(Action, f64)>, equity: f64) -> Self {
+        Self { actions, equity }
     }
+}
+fn max_eq(eq: &[(Action, f64)], player: Player) -> (Action, f64) {
+    eq.iter()
+        .max_by(|(_, a), (_, b)| {
+            if player == Player::White {
+                a.partial_cmp(b).unwrap()
+            } else {
+                b.partial_cmp(a).unwrap()
+            }
+        })
+        .unwrap()
+        .clone()
 }
 
 trait Evaluator {
@@ -54,10 +59,12 @@ impl OpenEvaluator {
         }
     }
     fn eval_init(&mut self, board: &Board) -> Equities {
-        Equities(vec![(Action::None, fetch_match_equities(&board.game))])
+        let p = fetch_match_equities(&board.game);
+        Equities::new(vec![], p)
     }
     fn eval_end(&mut self, board: &Board) -> Equities {
-        Equities(vec![(Action::Reset, fetch_match_equities(&board.game))])
+        let p = fetch_match_equities(&board.game);
+        Equities::new(vec![(Action::Reset, p)], p)
     }
     fn eval_move(&mut self, board: &Board) -> Equities {
         let moves = board.actions();
@@ -65,79 +72,98 @@ impl OpenEvaluator {
         for mov in moves {
             let mut next = board.clone();
             next.act(&mov);
-            equities.push((mov, self.eval(&next).max(board.player.unwrap()).1));
+            equities.push((mov, self.eval(&next).equity));
         }
-        Equities(equities)
+        let e = max_eq(&equities, board.player.unwrap()).1;
+        Equities::new(equities, e)
     }
     fn eval_to_double(&mut self, board: &Board) -> Equities {
         let mut no_double = board.clone();
         no_double.act(&Action::NoDouble);
-        let no_double_eq = self
-            .eval(&no_double)
-            .0
-            .into_iter()
-            .map(|(a, eq)| {
-                if let Action::Roll(d) = a {
-                    d.prob() * eq
-                } else {
-                    unreachable!()
-                }
-            })
-            .sum();
+        let no_double_eq = self.eval(&no_double).equity;
         let mut eq = vec![(Action::NoDouble, no_double_eq)];
         if !board.can_double() {
-            return Equities(eq);
+            return Equities::new(eq, no_double_eq);
         }
         let mut double = board.clone();
         double.act(&Action::Double);
-        let double_eq = self.eval(&double).max(board.player.unwrap()).1;
+        let double_eq = self.eval(&double).equity;
         eq.push((Action::Double, double_eq));
-        Equities(eq)
+        let e = max_eq(&eq, board.player.unwrap()).1;
+        Equities::new(eq, e)
     }
     fn eval_to_roll(&mut self, board: &Board) -> Equities {
+        let mut roll_eq = 0.;
         let roll = DiceRoll::all()
             .into_iter()
             .map(|dice| {
                 let act = Action::Roll(dice);
                 let mut roll = board.clone();
                 roll.act(&act);
-                let eq = self.eval(&roll).max(roll.player.unwrap()).1;
+                let eq = self.eval(&roll).equity;
+                roll_eq += dice.prob() * eq;
                 (act, eq)
             })
             .collect();
-        Equities(roll)
+        Equities::new(roll, roll_eq)
     }
     fn eval_doubled(&mut self, board: &Board) -> Equities {
-        println!("doubled {}", board);
         let mut pass = board.clone();
         pass.act(&Action::Pass);
-        let pass_eq = self.eval(&pass).max(board.player.unwrap());
-        println!("pass {}", pass);
-        println!("pass_eq {:?}", pass_eq);
+        let pass_eq = self.eval(&pass).equity;
 
         let mut take = board.clone();
         take.act(&Action::Take);
-        println!("take {}", take);
-        let take_eq = self.eval(&take).max(board.player.unwrap());
-        println!("take_eq {:?}", take_eq);
-        Equities(vec![(Action::Pass, pass_eq.1), (Action::Take, take_eq.1)])
+        let take_eq = self.eval(&take).equity;
+        let e = vec![(Action::Pass, pass_eq), (Action::Take, take_eq)];
+        let ea = max_eq(&e, board.player.unwrap()).1;
+        Equities::new(e, ea)
     }
 
     fn gen_tree(&self, board: &Board) -> Tree {
-        match board.state() {
-            crate::board::State::ToRoll => {}
-            crate::board::State::End => {}
-            crate::board::State::MatchEnd => {}
-            _ => {}
+        if board.state() == State::Init
+            || board.state() == State::End
+            || board.state() == State::MatchEnd
+        {
+            return Tree {
+                root: board.clone(),
+                children: vec![],
+                equity: fetch_match_equities(&board.game),
+            };
         }
-        todo!()
+        let p = self.tree.get(board).unwrap();
+        let mut res = vec![];
+        for (act, e) in &p.actions {
+            let mut b = board.clone();
+            b.act(act);
+            let t = self.gen_tree(&b);
+            res.push((act.clone(), t));
+        }
+        Tree {
+            root: board.clone(),
+            children: res,
+            equity: p.equity,
+        }
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct Tree {
     root: Board,
-    children: Vec<Equities>,
-    prob: f64,
+    children: Vec<(Action, Tree)>,
+    equity: f64,
+}
+impl Tree {
+    fn display(&self, depth: usize, max: usize) {
+        println!("{}{} {}", " ".repeat(depth), self.root.xgid(), self.equity);
+        if depth >= max {
+            return;
+        }
+        for (act, t) in &self.children {
+            println!("{}{:?}", " ".repeat(depth + 1), act);
+            t.display(depth + 2, max);
+        }
+    }
 }
 
 fn fetch_match_equities(game: &Match) -> f64 {
@@ -181,30 +207,38 @@ mod test {
         let mut e = OpenEvaluator::new();
         let eq = e.eval(&b);
         println!("{:?}", eq);
-        assert_eq!(eq.0.len(), 2);
+        assert_eq!(eq.actions.len(), 2);
         let eps = 1e5;
-        assert!((eq.0[0].1 - 1.).abs() < eps, "{}", eq.0[0].1);
-        assert!((eq.0[1].1 - 1.).abs() < eps, "{}", eq.0[1].1);
+        let act = eq.actions;
+        assert!((act[0].1 - 1.).abs() < eps, "{}", act[0].1);
+        assert!((act[1].1 - 1.).abs() < eps, "{}", act[1].1);
     }
     #[test]
     fn small_case() {
-        let b = Board::from_xgid("XGID=-----A-----------------a--:0:0:1::0:0:0:1:10");
+        let b = Board::from_xgid("XGID=-----A-----------------a--:0:0:1::0:0:0:3:10");
         println!("{}", b);
         let mut e = OpenEvaluator::new();
         let eq = e.eval(&b);
         println!("{:?}", eq);
-        assert_eq!(eq.0.len(), 2);
-        let eps = 1e-5;
-        assert!(eq.0[0].1 + eps < 1., "assert {} < 1", eq.0[0].1);
-        assert!((eq.0[1].1 - 1.).abs() < eps, "{}", eq.0[1].1);
+        let act = eq.actions;
+        assert_eq!(act.len(), 2);
+        e.gen_tree(&b).display(0, 3);
+        assert!((act[0].1 - 0.55).abs() < 0.01, "{}", act[0].1);
+        assert!((act[1].1 - 0.57).abs() < 0.01, "{}", act[1].1);
     }
     #[test]
     fn take_case() {
-        let b = Board::from_xgid("XGID=--------A--------------a--:0:0:1::0:0:0:3:10");
+        let mut b = Board::from_xgid("XGID=-----------------A-----a--:0:0:1::0:0:0:3:10");
         println!("{}", b);
         let mut e = OpenEvaluator::new();
         let eq = e.eval(&b);
         println!("{:?}", eq);
+        let act = eq.actions;
+        assert!((act[0].1 - 0.43).abs() < 0.01, "{}", act[0].1);
+        assert!((act[1].1 - 0.27).abs() < 0.01, "{}", act[1].1);
+        // b.act(&Action::Double);
+        // b.act(&Action::Take);
+        // e.gen_tree(&b).display(0, 5);
     }
 
     #[test]

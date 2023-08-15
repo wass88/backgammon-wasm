@@ -329,7 +329,8 @@ impl Match {
         }
         if self.crawford {
             self.crawford = false;
-        } else if not_reached && self.score.0 == self.length - 1 && self.score.1 == self.length - 1
+        } else if not_reached
+            && (self.score.0 == self.length - 1 || self.score.1 == self.length - 1)
         {
             self.crawford = true;
         }
@@ -561,8 +562,8 @@ impl Board {
         self.to_roll = true;
     }
     fn double(&mut self) {
-        let p = self.player.unwrap();
         assert!(self.can_double());
+        let p = self.player.unwrap();
         self.cube = self.cube.double(p);
         self.player = Some(p.opponent());
     }
@@ -585,7 +586,12 @@ impl Board {
     }
 
     fn reset(&mut self) {
-        todo!()
+        self.pieces = Pieces::new();
+        self.dice = DiceRoll::new();
+        self.cube = Cube::CENTER_INIT;
+        self.to_roll = false;
+        self.player = None;
+        self.result = None;
     }
 
     fn check_end(&mut self) {
@@ -601,7 +607,7 @@ impl Board {
         } else if black > 0 {
             self.result = Some(Result {
                 player: Player::Black,
-                score: black,
+                score: black * self.cube.value(),
             });
             self.game_end();
         }
